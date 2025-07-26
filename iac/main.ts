@@ -55,7 +55,7 @@ class ECRStack extends TerraformStack {
     const scanOnPush = process.env.ECR_SCAN_ON_PUSH === "true";
 
     // Create VPC for ECS service
-    const vpc = new Vpc(this, "tv-devops-vpc", {
+    const vpc = new Vpc(this, `${repositoryName}-vpc`, {
       cidrBlock: "10.0.0.0/16",
       enableDnsHostnames: true,
       enableDnsSupport: true,
@@ -68,7 +68,7 @@ class ECRStack extends TerraformStack {
     });
 
     // Create Internet Gateway
-    const internetGateway = new InternetGateway(this, "tv-devops-igw", {
+    const internetGateway = new InternetGateway(this, `${repositoryName}-igw`, {
       vpcId: vpc.id,
       tags: {
         Name: `${repositoryName}-igw`,
@@ -81,7 +81,7 @@ class ECRStack extends TerraformStack {
     // Create public subnets (one in each AZ)
     const publicSubnets: Subnet[] = [];
     for (let i = 0; i < 2; i++) {
-      const subnet = new Subnet(this, `tv-devops-subnet-${i + 1}`, {
+      const subnet = new Subnet(this, `${repositoryName}-subnet-${i + 1}`, {
         vpcId: vpc.id,
         cidrBlock: `10.0.${i + 1}.0/24`,
         availabilityZone: `\${${availabilityZones.fqn}.names[${i}]}`,
@@ -98,7 +98,7 @@ class ECRStack extends TerraformStack {
     }
 
     // Create route table for public subnets
-    const publicRouteTable = new RouteTable(this, "tv-devops-route-table", {
+    const publicRouteTable = new RouteTable(this, `${repositoryName}-route-table`, {
       vpcId: vpc.id,
       tags: {
         Name: `${repositoryName}-route-table`,
@@ -109,7 +109,7 @@ class ECRStack extends TerraformStack {
     });
 
     // Create route to internet gateway
-    new Route(this, "tv-devops-route", {
+    new Route(this, `${repositoryName}-route`, {
       routeTableId: publicRouteTable.id,
       destinationCidrBlock: "0.0.0.0/0",
       gatewayId: internetGateway.id,
@@ -117,14 +117,14 @@ class ECRStack extends TerraformStack {
 
     // Associate public subnets with route table
     publicSubnets.forEach((subnet, index) => {
-      new RouteTableAssociation(this, `tv-devops-subnet-assoc-${index + 1}`, {
+      new RouteTableAssociation(this, `${repositoryName}-subnet-assoc-${index + 1}`, {
         subnetId: subnet.id,
         routeTableId: publicRouteTable.id,
       });
     });
 
     // ECR Repository
-    const ecrRepository = new EcrRepository(this, "tv-devops-ecr-reg", {
+    const ecrRepository = new EcrRepository(this, `${repositoryName}-ecr-reg`, {
       name: repositoryName,
       imageTagMutability: imageTagMutability,
       imageScanningConfiguration: {
@@ -144,7 +144,7 @@ class ECRStack extends TerraformStack {
     });
 
     // Create IAM Role for ECR access (least privilege for container operations)
-    const ecrRole = new IamRole(this, "tv-devops-ecr-access-role", {
+    const ecrRole = new IamRole(this, `${repositoryName}-ecr-access-role`, {
       name: `${repositoryName}-ecr-role`,
       assumeRolePolicy: JSON.stringify({
         Version: "2012-10-17",
@@ -172,7 +172,7 @@ class ECRStack extends TerraformStack {
     });
 
     // Create IAM Policy for ECR operations (minimal required permissions)
-    new IamRolePolicy(this, "tv-devops-ecr-policy", {
+    new IamRolePolicy(this, `${repositoryName}-ecr-policy`, {
       name: `${repositoryName}-ecr-policy`,
       role: ecrRole.id,
       policy: JSON.stringify({
@@ -215,7 +215,7 @@ class ECRStack extends TerraformStack {
     });
 
     // Create ECS Task Execution Role (least privilege for ECS task execution)
-    const ecsTaskExecutionRole = new IamRole(this, "tv-devops-ecs-task-execution-role", {
+    const ecsTaskExecutionRole = new IamRole(this, `${repositoryName}-ecs-task-execution-role`, {
       name: `${repositoryName}-ecs-task-execution-role`,
       assumeRolePolicy: JSON.stringify({
         Version: "2012-10-17",
@@ -290,7 +290,7 @@ class ECRStack extends TerraformStack {
     });
 
     // Create deployment role (for CI/CD and infrastructure management)
-    const deploymentRole = new IamRole(this, "tv-devops-deployment-role", {
+    const deploymentRole = new IamRole(this, `${repositoryName}-deployment-role`, {
       name: `${repositoryName}-deployment-role`,
       assumeRolePolicy: JSON.stringify({
         Version: "2012-10-17",
@@ -393,7 +393,7 @@ class ECRStack extends TerraformStack {
     });
 
     // Create CloudWatch Log Group for ECS
-    const logGroup = new CloudwatchLogGroup(this, "tv-devops-ecs-log-group", {
+    const logGroup = new CloudwatchLogGroup(this, `${repositoryName}-ecs-log-group`, {
       name: `/ecs/${repositoryName}`,
       retentionInDays: 7,
       tags: {
@@ -405,7 +405,7 @@ class ECRStack extends TerraformStack {
     });
 
     // Create Security Group for ECS Service
-    const ecsSecurityGroup = new SecurityGroup(this, "tv-devops-ecs-sg", {
+    const ecsSecurityGroup = new SecurityGroup(this, `${repositoryName}-ecs-sg`, {
       name: `${repositoryName}-ecs-sg`,
       description: "Security group for ECS Fargate service - restrictive inbound, open outbound for container operations",
       vpcId: vpc.id,
@@ -464,7 +464,7 @@ class ECRStack extends TerraformStack {
     });
 
     // Create Security Group for VPC Endpoints (if needed for private subnets later)
-    new SecurityGroup(this, "tv-devops-vpc-endpoint-sg", {
+    new SecurityGroup(this, `${repositoryName}-vpc-endpoint-sg`, {
       name: `${repositoryName}-vpc-endpoint-sg`,
       description: "Security group for VPC endpoints - allows HTTPS from VPC",
       vpcId: vpc.id,
@@ -495,7 +495,7 @@ class ECRStack extends TerraformStack {
     });
 
     // Create ECS Cluster
-    const ecsCluster = new EcsCluster(this, "tv-devops-ecs-cluster", {
+    const ecsCluster = new EcsCluster(this, `${repositoryName}-ecs-cluster`, {
       name: `${repositoryName}-cluster`,
       setting: [
         {
@@ -512,7 +512,7 @@ class ECRStack extends TerraformStack {
     });
 
     // Create ECS Task Definition
-    const ecsTaskDefinition = new EcsTaskDefinition(this, "tv-devops-ecs-task-def", {
+    const ecsTaskDefinition = new EcsTaskDefinition(this, `${repositoryName}-ecs-task-def`, {
       family: `${repositoryName}-task`,
       networkMode: "awsvpc",
       requiresCompatibilities: ["FARGATE"],
@@ -550,7 +550,7 @@ class ECRStack extends TerraformStack {
     });
 
     // Create ECS Service
-    const ecsService = new EcsService(this, "tv-devops-ecs-service", {
+    const ecsService = new EcsService(this, `${repositoryName}-ecs-service`, {
       name: `${repositoryName}-service`,
       cluster: ecsCluster.id,
       taskDefinition: ecsTaskDefinition.arn,
