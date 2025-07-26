@@ -1,0 +1,22 @@
+# Ignore everything by default
+**
+
+# Except these files and directories needed for Docker build
+!Dockerfile
+!package.json
+!package-lock.json
+!src/
+!tsconfig.json
+
+# Whiteliest approach but a few common paths to ignore recursively
+**/node_modules/
+**/dist/
+**/logs/
+**/coverage/
+**/test/
+**/__tests__/
+**/*.test.*
+**/*.spec.*
+
+**/.DS_Store
+**/.vscode/
