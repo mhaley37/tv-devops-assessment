@@ -17,6 +17,9 @@ import { EcsCluster } from "@cdktf/provider-aws/lib/ecs-cluster";
 import { EcsTaskDefinition } from "@cdktf/provider-aws/lib/ecs-task-definition";
 import { EcsService } from "@cdktf/provider-aws/lib/ecs-service";
 import { CloudwatchLogGroup } from "@cdktf/provider-aws/lib/cloudwatch-log-group";
+import { LbTargetGroup } from "@cdktf/provider-aws/lib/lb-target-group";
+import { Lb } from "@cdktf/provider-aws/lib/lb";
+import { LbListener } from "@cdktf/provider-aws/lib/lb-listener";
 import * as dotenv from "dotenv";
 
 // Load environment variables from .env file
@@ -50,9 +53,10 @@ class ECRStack extends TerraformStack {
     });
 
     // Get configuration from environment variables with defaults
-    const repositoryName = process.env.ECR_REPOSITORY_NAME || "tv-devops-assessment";
-    const imageTagMutability = process.env.ECR_IMAGE_TAG_MUTABILITY || "MUTABLE";
+    const repositoryName = process.env.ECR_REPOSITORY_NAME ?? "tv-devops-assessment";
+    const imageTagMutability = process.env.ECR_IMAGE_TAG_MUTABILITY ?? "MUTABLE";
     const scanOnPush = process.env.ECR_SCAN_ON_PUSH === "true";
+    const ecsServiceImageTag = process.env.ECS_IMAGE_TAG ?? 'latest';
 
     // Create VPC for ECS service
     const vpc = new Vpc(this, `${repositoryName}-vpc`, {
@@ -411,11 +415,18 @@ class ECRStack extends TerraformStack {
       vpcId: vpc.id,
       ingress: [
         {
+          fromPort: 3000,
+          toPort: 3000,
+          protocol: "tcp",
+          cidrBlocks: ["0.0.0.0/0"],
+          description: "HTTP access from internet for web traffic on port 3000"
+        },
+        {
           fromPort: 80,
           toPort: 80,
           protocol: "tcp",
           cidrBlocks: ["0.0.0.0/0"],
-          description: "HTTP access from internet for web traffic"
+          description: "HTTP access from internet for web traffic (legacy support)"
         },
         {
           fromPort: 443,
@@ -494,6 +505,66 @@ class ECRStack extends TerraformStack {
       },
     });
 
+    // Create Application Load Balancer
+    const applicationLoadBalancer = new Lb(this, `${repositoryName}-alb`, {
+      name: `${repositoryName}-alb`,
+      loadBalancerType: "application",
+      subnets: publicSubnets.map(subnet => subnet.id),
+      securityGroups: [ecsSecurityGroup.id],
+      enableDeletionProtection: false,
+      tags: {
+        Name: `${repositoryName}-alb`,
+        Environment: "development",
+        Project: "tv-devops-assessment",
+        ManagedBy: "terraform-cdk",
+      },
+    });
+
+    // Create Target Group for health check
+    const targetGroup = new LbTargetGroup(this, `${repositoryName}-tg`, {
+      name: `${repositoryName}-tg`,
+      port: 3000,
+      protocol: "HTTP",
+      vpcId: vpc.id,
+      targetType: "ip",
+      healthCheck: {
+        enabled: true,
+        healthyThreshold: 2,
+        unhealthyThreshold: 2,
+        timeout: 5,
+        interval: 30,
+        path: "/health",
+        matcher: "200",
+        port: "traffic-port",
+        protocol: "HTTP"
+      },
+      tags: {
+        Name: `${repositoryName}-tg`,
+        Environment: "development",
+        Project: "tv-devops-assessment",
+        ManagedBy: "terraform-cdk",
+      },
+    });
+
+    // Create ALB Listener
+    new LbListener(this, `${repositoryName}-alb-listener`, {
+      loadBalancerArn: applicationLoadBalancer.arn,
+      port: 80,
+      protocol: "HTTP",
+      defaultAction: [
+        {
+          type: "forward",
+          targetGroupArn: targetGroup.arn,
+        }
+      ],
+      tags: {
+        Name: `${repositoryName}-alb-listener`,
+        Environment: "development",
+        Project: "tv-devops-assessment",
+        ManagedBy: "terraform-cdk",
+      },
+    });
+
     // Create ECS Cluster
     const ecsCluster = new EcsCluster(this, `${repositoryName}-ecs-cluster`, {
       name: `${repositoryName}-cluster`,
@@ -523,12 +594,30 @@ class ECRStack extends TerraformStack {
       containerDefinitions: JSON.stringify([
         {
           name: `${repositoryName}-container`,
-          image: `${ecrRepository.repositoryUrl}:latest`,
+          image: `${ecrRepository.repositoryUrl}:${ecsServiceImageTag}`,
           essential: true,
           portMappings: [
             {
-              containerPort: 80,
-              protocol: "tcp"
+              containerPort: 3000,
+              protocol: "tcp",
+              hostPort: 3000
+            }
+          ],
+          healthCheck: {
+            command: ["CMD-SHELL", "wget --spider --no-verbose --server-response http://localhost:3000/health"],
+            interval: 30,
+            timeout: 5,
+            retries: 3,
+            startPeriod: 60
+          },
+          environment: [
+            {
+              name: "PORT",
+              value: "3000"
+            },
+            {
+              name: "NODE_ENV",
+              value: "production"
             }
           ],
           logConfiguration: {
@@ -561,6 +650,14 @@ class ECRStack extends TerraformStack {
         securityGroups: [ecsSecurityGroup.id],
         assignPublicIp: true,
       },
+      loadBalancer: [
+        {
+          targetGroupArn: targetGroup.arn,
+          containerName: `${repositoryName}-container`,
+          containerPort: 3000,
+        }
+      ],
+      dependsOn: [applicationLoadBalancer],
       tags: {
         Name: `${repositoryName}-service`,
         Environment: "development",
@@ -666,6 +763,22 @@ class ECRStack extends TerraformStack {
     new TerraformOutput(this, "assume-deployment-role-command", {
       value: `aws sts assume-role --role-arn ${deploymentRole.arn} --role-session-name DeploymentAccess`,
       description: "Command to assume the deployment role for infrastructure management",
+    });
+
+    // Load Balancer Outputs
+    new TerraformOutput(this, "load-balancer-dns", {
+      value: applicationLoadBalancer.dnsName,
+      description: "Application Load Balancer DNS name for public access",
+    });
+
+    new TerraformOutput(this, "health-endpoint-url", {
+      value: `http://${applicationLoadBalancer.dnsName}/health`,
+      description: "Public URL for the health endpoint",
+    });
+
+    new TerraformOutput(this, "application-url", {
+      value: `http://${applicationLoadBalancer.dnsName}`,
+      description: "Public URL for the application",
     });
   }
 }
