@@ -54,11 +54,12 @@ class ECRStack extends TerraformStack {
     });
 
     // Get configuration from environment variables with defaults
+    // TODO: Replace this variable with more general Name
     const repositoryName = process.env.ECR_REPOSITORY_NAME ?? "tv-devops-assessment";
     const imageTagMutability = process.env.ECR_IMAGE_TAG_MUTABILITY ?? "MUTABLE";
     const scanOnPush = process.env.ECR_SCAN_ON_PUSH === "true";
     const ecrImageTag = process.env.ECR_IMAGE_TAG ?? 'latest';
-    const ecsServiceContainerPort = Number(process.env.PORT) ?? 3000; // Make this more durable
+    const ecsServiceContainerPort = Number(process.env.ECS_CONTAINER_PORT) ?? 3000; // Make this more durable
 
     // Create VPC for ECS service
     const vpc = new Vpc(this, `${repositoryName}-vpc`, {
