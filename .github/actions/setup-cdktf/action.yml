@@ -1,0 +1,56 @@
+name: Setup and Build CDKTF
+description: Sets up Node.js, Terraform CLI, CDKTF CLI, installs dependencies, gets providers, and builds CDKTF project
+
+inputs:
+  aws-access-key-id:
+    description: AWS Access Key ID
+    required: true
+  aws-secret-access-key:
+    description: AWS Secret Access Key
+    required: true
+  aws-region:
+    description: AWS Default Region
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: 24
+        cache: npm
+        cache-dependency-path: iac/package-lock.json
+    
+    - name: Install CDKTF dependencies
+      working-directory: ./iac
+      shell: bash
+      run: npm install
+    
+    - name: Setup Terraform CLI
+      uses: hashicorp/setup-terraform@v3
+    
+    - name: Install CDKTF CLI
+      shell: bash
+      run: npm install -g cdktf-cli
+    
+    - name: Get providers
+      working-directory: ./iac
+      shell: bash
+      run: npm run get
+    
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        aws-access-key-id: ${{ inputs.aws-access-key-id }}
+        aws-secret-access-key: ${{ inputs.aws-secret-access-key }}
+        aws-region: ${{ inputs.aws-region }}
+    
+    - name: Build CDKTF project
+      working-directory: ./iac
+      shell: bash
+      run: npm run build
+
+    - name: Synthesize CDKTF
+      working-directory: ./iac
+      run: npm run synth      

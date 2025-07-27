@@ -26,7 +26,7 @@ import * as dotenv from "dotenv";
 // Load environment variables from .env file
 dotenv.config();
 
-class ECRStack extends TerraformStack {
+class ECRAppInstance extends TerraformStack {
   constructor(scope: Construct, id: string) {
     super(scope, id);
 
@@ -54,33 +54,38 @@ class ECRStack extends TerraformStack {
     });
 
     // Get configuration from environment variables with defaults
-    // TODO: Replace this variable with more general Name
-    const repositoryName = process.env.ECR_REPOSITORY_NAME ?? "tv-devops-assessment";
+    const projectName = process.env.ECR_REPOSITORY_NAME ?? "tv-devops-assessment";
     const imageTagMutability = process.env.ECR_IMAGE_TAG_MUTABILITY ?? "MUTABLE";
-    const scanOnPush = process.env.ECR_SCAN_ON_PUSH === "true";
+    const ecrForceDelete = process.env.ECR_FORCE_DELETE === "true";
+    const ecrScanOnPush = process.env.ECR_SCAN_ON_PUSH === "true";
     const ecrImageTag = process.env.ECR_IMAGE_TAG ?? 'latest';
     const ecsServiceContainerPort = Number(process.env.ECS_CONTAINER_PORT) ?? 3000; // Make this more durable
 
+    const isValidEcsContainerPort = (port: number) => (!isNaN(port) && Number.isInteger(port) && port > 0);
+    if (process.env.ECS_CONTAINER_PORT && !isValidEcsContainerPort(ecsServiceContainerPort)) {
+      throw new Error(`Invalid ECS_CONTAINER_PORT: ${process.env.ECS_CONTAINER_PORT}`);
+    }
+
     // Create VPC for ECS service
-    const vpc = new Vpc(this, `${repositoryName}-vpc`, {
+    const vpc = new Vpc(this, `${projectName}-vpc`, {
       cidrBlock: "10.0.0.0/16",
       enableDnsHostnames: true,
       enableDnsSupport: true,
       tags: {
-        Name: `${repositoryName}-vpc`,
+        Name: `${projectName}-vpc`,
         Environment: "development",
-        Project: "tv-devops-assessment",
+        Project: projectName,
         ManagedBy: "terraform-cdk",
       },
     });
 
     // Create Internet Gateway
-    const internetGateway = new InternetGateway(this, `${repositoryName}-igw`, {
+    const internetGateway = new InternetGateway(this, `${projectName}-igw`, {
       vpcId: vpc.id,
       tags: {
-        Name: `${repositoryName}-igw`,
+        Name: `${projectName}-igw`,
         Environment: "development",
-        Project: "tv-devops-assessment",
+        Project: projectName,
         ManagedBy: "terraform-cdk",
       },
     });
@@ -88,16 +93,16 @@ class ECRStack extends TerraformStack {
     // Create public subnets ( limit to 2 Azs for now)
     const publicSubnets: Subnet[] = [];
     for (let i = 0; i < 2; i++) {
-      const subnet = new Subnet(this, `${repositoryName}-subnet-${i + 1}`, {
+      const subnet = new Subnet(this, `${projectName}-subnet-${i + 1}`, {
         vpcId: vpc.id,
         cidrBlock: `10.0.${i + 1}.0/24`,
         availabilityZone: `\${${availabilityZones.fqn}.names[${i}]}`,
         mapPublicIpOnLaunch: true,
         tags: {
-          Name: `${repositoryName}-subnet-${i + 1}`,
+          Name: `${projectName}-subnet-${i + 1}`,
           Type: "Public",
           Environment: "development",
-          Project: "tv-devops-assessment",
+          Project: projectName,
           ManagedBy: "terraform-cdk",
         },
       });
@@ -105,18 +110,18 @@ class ECRStack extends TerraformStack {
     }
 
     // Create route table for public subnets
-    const publicRouteTable = new RouteTable(this, `${repositoryName}-route-table`, {
+    const publicRouteTable = new RouteTable(this, `${projectName}-route-table`, {
       vpcId: vpc.id,
       tags: {
-        Name: `${repositoryName}-route-table`,
+        Name: `${projectName}-route-table`,
         Environment: "development",
-        Project: "tv-devops-assessment",
+        Project: projectName,
         ManagedBy: "terraform-cdk",
       },
     });
 
     // Create route to internet gateway
-    new Route(this, `${repositoryName}-route`, {
+    new Route(this, `${projectName}-route`, {
       routeTableId: publicRouteTable.id,
       destinationCidrBlock: "0.0.0.0/0",
       gatewayId: internetGateway.id,
@@ -124,18 +129,19 @@ class ECRStack extends TerraformStack {
 
     // Associate public subnets with route table
     publicSubnets.forEach((subnet, index) => {
-      new RouteTableAssociation(this, `${repositoryName}-subnet-assoc-${index + 1}`, {
+      new RouteTableAssociation(this, `${projectName}-subnet-assoc-${index + 1}`, {
         subnetId: subnet.id,
         routeTableId: publicRouteTable.id,
       });
     });
 
     // ECR Repository
-    const ecrRepository = new EcrRepository(this, `${repositoryName}-ecr-reg`, {
-      name: repositoryName,
+    const ecrRepository = new EcrRepository(this, `${projectName}-ecr-reg`, {
+      name: projectName,
       imageTagMutability: imageTagMutability,
+      forceDelete: ecrForceDelete,
       imageScanningConfiguration: {
-        scanOnPush: scanOnPush,
+        scanOnPush: ecrScanOnPush,
       },
       encryptionConfiguration: [
         {
@@ -143,16 +149,16 @@ class ECRStack extends TerraformStack {
         },
       ],
       tags: {
-        Name: repositoryName,
+        Name: projectName,
         Environment: "development",
-        Project: "tv-devops-assessment",
+        Project: projectName,
         ManagedBy: "terraform-cdk",
       },
     });
 
     // Create IAM Role for ECR access (least privilege for container operations)
-    const ecrRole = new IamRole(this, `${repositoryName}-ecr-access-role`, {
-      name: `${repositoryName}-ecr-role`,
+    const ecrRole = new IamRole(this, `${projectName}-ecr-access-role`, {
+      name: `${projectName}-ecr-role`,
       assumeRolePolicy: JSON.stringify({
         Version: "2012-10-17",
         Statement: [
@@ -171,16 +177,16 @@ class ECRStack extends TerraformStack {
         ]
       }),
       tags: {
-        Name: `${repositoryName}-ecr-role`,
+        Name: `${projectName}-ecr-role`,
         Environment: "development",
-        Project: "tv-devops-assessment",
+        Project: projectName,
         ManagedBy: "terraform-cdk",
       },
     });
 
     // Create IAM Policy for ECR operations (minimal required permissions)
-    new IamRolePolicy(this, `${repositoryName}-ecr-policy`, {
-      name: `${repositoryName}-ecr-policy`,
+    new IamRolePolicy(this, `${projectName}-ecr-policy`, {
+      name: `${projectName}-ecr-policy`,
       role: ecrRole.id,
       policy: JSON.stringify({
         Version: "2012-10-17",
@@ -215,15 +221,15 @@ class ECRStack extends TerraformStack {
               "logs:CreateLogStream",
               "logs:PutLogEvents"
             ],
-            Resource: `arn:aws:logs:${process.env.AWS_DEFAULT_REGION}:${currentIdentity.accountId}:log-group:/ecs/${repositoryName}:*`
+            Resource: `arn:aws:logs:${process.env.AWS_DEFAULT_REGION}:${currentIdentity.accountId}:log-group:/ecs/${projectName}:*`
           }
         ]
       })
     });
 
     // Create ECS Task Execution Role (least privilege for ECS task execution)
-    const ecsTaskExecutionRole = new IamRole(this, `${repositoryName}-ecs-task-execution-role`, {
-      name: `${repositoryName}-ecs-task-execution-role`,
+    const ecsTaskExecutionRole = new IamRole(this, `${projectName}-ecs-task-execution-role`, {
+      name: `${projectName}-ecs-task-execution-role`,
       assumeRolePolicy: JSON.stringify({
         Version: "2012-10-17",
         Statement: [
@@ -242,16 +248,16 @@ class ECRStack extends TerraformStack {
         ]
       }),
       tags: {
-        Name: `${repositoryName}-ecs-task-execution-role`,
+        Name: `${projectName}-ecs-task-execution-role`,
         Environment: "development",
-        Project: "tv-devops-assessment",
+        Project: projectName,
         ManagedBy: "terraform-cdk",
       },
     });
 
     // Attach minimal ECS Task Execution Role Policy (least privilege)
     new IamRolePolicy(this, "ecs-task-execution-policy", {
-      name: `${repositoryName}-ecs-task-execution-policy`,
+      name: `${projectName}-ecs-task-execution-policy`,
       role: ecsTaskExecutionRole.id,
       policy: JSON.stringify({
         Version: "2012-10-17",
@@ -288,8 +294,8 @@ class ECRStack extends TerraformStack {
               "logs:PutLogEvents"
             ],
             Resource: [
-              `arn:aws:logs:${process.env.AWS_DEFAULT_REGION}:${currentIdentity.accountId}:log-group:/ecs/${repositoryName}`,
-              `arn:aws:logs:${process.env.AWS_DEFAULT_REGION}:${currentIdentity.accountId}:log-group:/ecs/${repositoryName}:*`
+              `arn:aws:logs:${process.env.AWS_DEFAULT_REGION}:${currentIdentity.accountId}:log-group:/ecs/${projectName}`,
+              `arn:aws:logs:${process.env.AWS_DEFAULT_REGION}:${currentIdentity.accountId}:log-group:/ecs/${projectName}:*`
             ]
           }
         ]
@@ -297,8 +303,8 @@ class ECRStack extends TerraformStack {
     });
 
     // Create deployment role (for CI/CD and infrastructure management)
-    const deploymentRole = new IamRole(this, `${repositoryName}-deployment-role`, {
-      name: `${repositoryName}-deployment-role`,
+    const deploymentRole = new IamRole(this, `${projectName}-deployment-role`, {
+      name: `${projectName}-deployment-role`,
       assumeRolePolicy: JSON.stringify({
         Version: "2012-10-17",
         Statement: [
@@ -317,16 +323,16 @@ class ECRStack extends TerraformStack {
         ]
       }),
       tags: {
-        Name: `${repositoryName}-deployment-role`,
+        Name: `${projectName}-deployment-role`,
         Environment: "development",
-        Project: "tv-devops-assessment",
+        Project: projectName,
         ManagedBy: "terraform-cdk",
       },
     });
 
     // Deployment role policy (for infrastructure management and container deployment)
     new IamRolePolicy(this, "deployment-role-policy", {
-      name: `${repositoryName}-deployment-policy`,
+      name: `${projectName}-deployment-policy`,
       role: deploymentRole.id,
       policy: JSON.stringify({
         Version: "2012-10-17",
@@ -393,28 +399,28 @@ class ECRStack extends TerraformStack {
               "logs:DescribeLogGroups",
               "logs:DescribeLogStreams"
             ],
-            Resource: `arn:aws:logs:${process.env.AWS_DEFAULT_REGION}:${currentIdentity.accountId}:log-group:/ecs/${repositoryName}*`
+            Resource: `arn:aws:logs:${process.env.AWS_DEFAULT_REGION}:${currentIdentity.accountId}:log-group:/ecs/${projectName}*`
           }
         ]
       })
     });
 
     // Create CloudWatch Log Group for ECS
-    const logGroup = new CloudwatchLogGroup(this, `${repositoryName}-ecs-log-group`, {
-      name: `/ecs/${repositoryName}`,
+    const logGroup = new CloudwatchLogGroup(this, `${projectName}-ecs-log-group`, {
+      name: `/ecs/${projectName}`,
       retentionInDays: 7,
       tags: {
-        Name: `/ecs/${repositoryName}`,
+        Name: `/ecs/${projectName}`,
         Environment: "development",
-        Project: "tv-devops-assessment",
+        Project: projectName,
         ManagedBy: "terraform-cdk",
       },
     });
 
-    // Create Security Group for ALB (allows public traffic on port 80)
-    const albSecurityGroup = new SecurityGroup(this, `${repositoryName}-alb-sg`, {
-      name: `${repositoryName}-alb-sg`,
-      description: "Security group for Application Load Balancer - allows public HTTP traffic",
+    // Create Security Group for ALB (allows public traffic on port 80 only)
+    const albSecurityGroup = new SecurityGroup(this, `${projectName}-alb-sg`, {
+      name: `${projectName}-alb-sg`,
+      description: "Security group for Application Load Balancer - allows public HTTP traffic on port 80 only",
       vpcId: vpc.id,
       ingress: [
         {
@@ -422,44 +428,30 @@ class ECRStack extends TerraformStack {
           toPort: 80,
           protocol: "tcp",
           cidrBlocks: ["0.0.0.0/0"],
-          description: "HTTP access from internet"
-        },
-        {
-          fromPort: 443,
-          toPort: 443,
-          protocol: "tcp",
-          cidrBlocks: ["0.0.0.0/0"],
-          description: "HTTPS access from internet"
-        },
-        {
-          fromPort: 80,
-          toPort: 80,
-          protocol: "tcp",
-          cidrBlocks: ["0.0.0.0/0"],
-          description: "HTTP access from internet"
-        },        
+          description: "HTTP access from internet on port 80"
+        }
       ],
       egress: [
         {
-          fromPort: 0,
-          toPort: 65535,
+          fromPort: 3000,
+          toPort: 3000,
           protocol: "tcp",
-          cidrBlocks: ["0.0.0.0/0"],
-          description: "All outbound traffic"
+          cidrBlocks: [vpc.cidrBlock],
+          description: "Outbound traffic to ECS containers on port 3000"
         }
       ],
       tags: {
-        Name: `${repositoryName}-alb-sg`,
+        Name: `${projectName}-alb-sg`,
         Environment: "development",
-        Project: "tv-devops-assessment",
+        Project: projectName,
         ManagedBy: "terraform-cdk",
       },
     });
 
-    // Create Security Group for ECS Service (only allows traffic from ALB on port 3000)
-    const ecsSecurityGroup = new SecurityGroup(this, `${repositoryName}-ecs-sg`, {
-      name: `${repositoryName}-ecs-sg`,
-      description: "Security group for ECS Fargate service - only allows traffic from ALB on port 3000",
+    // Create Security Group for ECS Service (only allows traffic from ALB on container port 3000)
+    const ecsSecurityGroup = new SecurityGroup(this, `${projectName}-ecs-sg`, {
+      name: `${projectName}-ecs-sg`,
+      description: "Security group for ECS Fargate service - only allows traffic from ALB on container port 3000",
       vpcId: vpc.id,
       ingress: [
         {
@@ -488,30 +480,23 @@ class ECRStack extends TerraformStack {
         {
           fromPort: 53,
           toPort: 53,
-          protocol: "udp",
-          cidrBlocks: ["0.0.0.0/0"],
-          description: "DNS resolution"
-        },
-        {
-          fromPort: 53,
-          toPort: 53,
           protocol: "tcp",
           cidrBlocks: ["0.0.0.0/0"],
-          description: "DNS resolution over TCP"
+          description: "DNS resolution"
         }
       ],
       tags: {
-        Name: `${repositoryName}-ecs-sg`,
+        Name: `${projectName}-ecs-sg`,
         Environment: "development",
-        Project: "tv-devops-assessment",
+        Project: projectName,
         ManagedBy: "terraform-cdk",
       },
       dependsOn: [albSecurityGroup], // Ensure ALB SG is created first
     });
 
     // Create Security Group for VPC Endpoints (if needed for private subnets later)
-    new SecurityGroup(this, `${repositoryName}-vpc-endpoint-sg`, {
-      name: `${repositoryName}-vpc-endpoint-sg`,
+    new SecurityGroup(this, `${projectName}-vpc-endpoint-sg`, {
+      name: `${projectName}-vpc-endpoint-sg`,
       description: "Security group for VPC endpoints - allows HTTPS from VPC",
       vpcId: vpc.id,
       ingress: [
@@ -533,45 +518,45 @@ class ECRStack extends TerraformStack {
         }
       ],
       tags: {
-        Name: `${repositoryName}-vpc-endpoint-sg`,
+        Name: `${projectName}-vpc-endpoint-sg`,
         Environment: "development",
-        Project: "tv-devops-assessment",
+        Project: projectName,
         ManagedBy: "terraform-cdk",
       },
     });
 
     // Create ALB
-    const applicationLoadBalancer = new Lb(this, `${repositoryName}-alb`, {
-      name: `${repositoryName}-alb`,
+    const applicationLoadBalancer = new Lb(this, `${projectName}-alb`, {
+      name: `${projectName}-alb`,
       loadBalancerType: "application",
       subnets: publicSubnets.map(subnet => subnet.id),
       securityGroups: [albSecurityGroup.id],
       enableDeletionProtection: false,
       tags: {
-        Name: `${repositoryName}-alb`,
+        Name: `${projectName}-alb`,
         Environment: "development",
-        Project: "tv-devops-assessment",
+        Project: projectName,
         ManagedBy: "terraform-cdk",
       },
     });
 
     // Create Target Group for the API service
-    const targetGroup = new LbTargetGroup(this, `${repositoryName}-tg`, {
-      name: `${repositoryName}-tg`,
+    const targetGroup = new LbTargetGroup(this, `${projectName}-tg`, {
+      name: `${projectName}-tg`,
       port: ecsServiceContainerPort,
       protocol: "HTTP",
       vpcId: vpc.id,
       targetType: "ip",
       tags: {
-        Name: `${repositoryName}-tg`,
+        Name: `${projectName}-tg`,
         Environment: "development",
-        Project: "tv-devops-assessment",
+        Project: projectName,
         ManagedBy: "terraform-cdk",
       },
     });
 
     // Create ALB Listener to forward all traffic to the TargetGroup above
-    const albListener = new LbListener(this, `${repositoryName}-alb-listener`, {
+    const albListener = new LbListener(this, `${projectName}-alb-listener`, {
       loadBalancerArn: applicationLoadBalancer.arn,
       port: 80,
       protocol: "HTTP",
@@ -582,15 +567,15 @@ class ECRStack extends TerraformStack {
         }
       ],
       tags: {
-        Name: `${repositoryName}-alb-listener`,
+        Name: `${projectName}-alb-listener`,
         Environment: "development",
-        Project: "tv-devops-assessment",
+        Project: projectName,
         ManagedBy: "terraform-cdk",
       },
     });
 
     // Create specific listener rule for /health endpoint with fixed response
-    new LbListenerRule(this, `${repositoryName}-health-rule`, {
+    new LbListenerRule(this, `${projectName}-health-rule`, {
       listenerArn: albListener.arn,
       priority: 100,
       condition: [
@@ -611,16 +596,16 @@ class ECRStack extends TerraformStack {
         }
       ],
       tags: {
-        Name: `${repositoryName}-health-rule`,
+        Name: `${projectName}-health-rule`,
         Environment: "development",
-        Project: "tv-devops-assessment",
+        Project: projectName,
         ManagedBy: "terraform-cdk",
       },
     });
 
     // Create ECS Cluster
-    const ecsCluster = new EcsCluster(this, `${repositoryName}-ecs-cluster`, {
-      name: `${repositoryName}-cluster`,
+    const ecsCluster = new EcsCluster(this, `${projectName}-ecs-cluster`, {
+      name: `${projectName}-cluster`,
       setting: [
         {
           name: "containerInsights",
@@ -628,16 +613,16 @@ class ECRStack extends TerraformStack {
         }
       ],
       tags: {
-        Name: `${repositoryName}-cluster`,
+        Name: `${projectName}-cluster`,
         Environment: "development",
-        Project: "tv-devops-assessment",
+        Project: projectName,
         ManagedBy: "terraform-cdk",
       },
     });
 
     // Create ECS Task Definition, 
-    const ecsTaskDefinition = new EcsTaskDefinition(this, `${repositoryName}-ecs-task-def`, {
-      family: `${repositoryName}-task`,
+    const ecsTaskDefinition = new EcsTaskDefinition(this, `${projectName}-ecs-task-def`, {
+      family: `${projectName}-task`,
       networkMode: "awsvpc",
       requiresCompatibilities: ["FARGATE"],
       cpu: "256",
@@ -646,7 +631,7 @@ class ECRStack extends TerraformStack {
       taskRoleArn: ecrRole.arn,
       containerDefinitions: JSON.stringify([
         {
-          name: `${repositoryName}-app-container`,
+          name: `${projectName}-app-container`,
           image: `${ecrRepository.repositoryUrl}:${ecrImageTag}`,
           essential: true,
           portMappings: [
@@ -656,11 +641,12 @@ class ECRStack extends TerraformStack {
             }
           ],
           healthCheck: {
-            command: ["CMD-SHELL","ls"],
-            // command: ["CMD-SHELL", "wget --spider --no-verbose --server-response http://localhost:3000/health"],
+            // TODO: Update this to actually check path of the application
+            //command: ["CMD-SHELL","ls"],
+            command: ["CMD-SHELL", `wget --spider --no-verbose --server-response http://localhost:${ecsServiceContainerPort}`],
             interval: 60,
             timeout: 10,
-            retries: 6,
+            retries: 3,
             startPeriod: 60
           },
           environment: [
@@ -684,20 +670,20 @@ class ECRStack extends TerraformStack {
         }
       ]),
       tags: {
-        Name: `${repositoryName}-task`,
+        Name: `${projectName}-task`,
         Environment: "development",
-        Project: "tv-devops-assessment",
+        Project: projectName,
         ManagedBy: "terraform-cdk",
       },
     });
 
     // Create ECS Service to run containers 
-    const ecsService = new EcsService(this, `${repositoryName}-ecs-service`, {
-      name: `${repositoryName}-service`,
+    const ecsService = new EcsService(this, `${projectName}-ecs-service`, {
+      name: `${projectName}-service`,
       cluster: ecsCluster.id,
       taskDefinition: ecsTaskDefinition.arn,
       launchType: "FARGATE",
-      desiredCount: 2,
+      desiredCount: 2, // TODO: Cap this at 2 for now, could do 1 per AZ
       networkConfiguration: {
         subnets: publicSubnets.map(subnet => subnet.id),
         securityGroups: [ecsSecurityGroup.id],
@@ -706,15 +692,15 @@ class ECRStack extends TerraformStack {
       loadBalancer: [
         {
           targetGroupArn: targetGroup.arn,
-          containerName: `${repositoryName}-app-container`,
+          containerName: `${projectName}-app-container`,
           containerPort: ecsServiceContainerPort,
         }
       ],
       dependsOn: [applicationLoadBalancer],
       tags: {
-        Name: `${repositoryName}-service`,
+        Name: `${projectName}-service`,
         Environment: "development",
-        Project: "tv-devops-assessment",
+        Project: projectName,
         ManagedBy: "terraform-cdk",
       },
     });
@@ -837,5 +823,5 @@ class ECRStack extends TerraformStack {
 }
 
 const app = new App();
-new ECRStack(app, "ecr-instance");
+new ECRAppInstance(app, "ecr-app-instance");
 app.synth();

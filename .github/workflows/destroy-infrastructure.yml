@@ -12,37 +12,12 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
       
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '24'
-          cache: 'npm'
-          cache-dependency-path: 'iac/package-lock.json'
-      
-      - name: Install CDKTF dependencies
-        working-directory: ./iac
-        run: npm install
-      
-      - name: Setup Terraform CLI
-        uses: hashicorp/setup-terraform@v3
-      
-      - name: Install CDKTF CLI
-        run: npm install -g cdktf-cli
-      
-      - name: Get providers
-        working-directory: ./iac
-        run: npm run get
-      
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v4
+      - name: Setup and Build CDKTF
+        uses: ./.github/actions/setup-cdktf
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ vars.AWS_DEFAULT_REGION }}
-      
-      - name: Build CDKTF project
-        working-directory: ./iac
-        run: npm run build
       
       - name: Destroy infrastructure
         working-directory: ./iac
@@ -50,6 +25,7 @@ jobs:
           AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           AWS_DEFAULT_REGION: ${{ vars.AWS_DEFAULT_REGION }}
+          TERRAFORM_STATE_BUCKET: ${{ vars.TERRAFORM_STATE_BUCKET }}
           ECR_REPOSITORY_NAME: ${{ vars.ECR_REPOSITORY_NAME }}
           ECR_IMAGE_TAG_MUTABILITY: ${{ vars.ECR_IMAGE_TAG_MUTABILITY }}
           ECR_SCAN_ON_PUSH: ${{ vars.ECR_SCAN_ON_PUSH }}
