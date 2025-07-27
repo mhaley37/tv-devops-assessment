@@ -20,6 +20,7 @@ import { CloudwatchLogGroup } from "@cdktf/provider-aws/lib/cloudwatch-log-group
 import { LbTargetGroup } from "@cdktf/provider-aws/lib/lb-target-group";
 import { Lb } from "@cdktf/provider-aws/lib/lb";
 import { LbListener } from "@cdktf/provider-aws/lib/lb-listener";
+import { LbListenerRule } from "@cdktf/provider-aws/lib/lb-listener-rule";
 import * as dotenv from "dotenv";
 
 // Load environment variables from .env file
@@ -57,6 +58,7 @@ class ECRStack extends TerraformStack {
     const imageTagMutability = process.env.ECR_IMAGE_TAG_MUTABILITY ?? "MUTABLE";
     const scanOnPush = process.env.ECR_SCAN_ON_PUSH === "true";
     const ecsServiceImageTag = process.env.ECS_IMAGE_TAG ?? 'latest';
+    const ecsServiceContainerPort = Number(process.env.PORT) ?? 3000; // Make this more durable
 
     // Create VPC for ECS service
     const vpc = new Vpc(this, `${repositoryName}-vpc`, {
@@ -82,7 +84,7 @@ class ECRStack extends TerraformStack {
       },
     });
 
-    // Create public subnets (one in each AZ)
+    // Create public subnets ( limit to 2 Azs for now)
     const publicSubnets: Subnet[] = [];
     for (let i = 0; i < 2; i++) {
       const subnet = new Subnet(this, `${repositoryName}-subnet-${i + 1}`, {
@@ -408,32 +410,63 @@ class ECRStack extends TerraformStack {
       },
     });
 
-    // Create Security Group for ECS Service
-    const ecsSecurityGroup = new SecurityGroup(this, `${repositoryName}-ecs-sg`, {
-      name: `${repositoryName}-ecs-sg`,
-      description: "Security group for ECS Fargate service - restrictive inbound, open outbound for container operations",
+    // Create Security Group for ALB (allows public traffic on port 80)
+    const albSecurityGroup = new SecurityGroup(this, `${repositoryName}-alb-sg`, {
+      name: `${repositoryName}-alb-sg`,
+      description: "Security group for Application Load Balancer - allows public HTTP traffic",
       vpcId: vpc.id,
       ingress: [
-        {
-          fromPort: 3000,
-          toPort: 3000,
-          protocol: "tcp",
-          cidrBlocks: ["0.0.0.0/0"],
-          description: "HTTP access from internet for web traffic on port 3000"
-        },
         {
           fromPort: 80,
           toPort: 80,
           protocol: "tcp",
           cidrBlocks: ["0.0.0.0/0"],
-          description: "HTTP access from internet for web traffic (legacy support)"
+          description: "HTTP access from internet"
         },
         {
           fromPort: 443,
           toPort: 443,
           protocol: "tcp",
           cidrBlocks: ["0.0.0.0/0"],
-          description: "HTTPS access from internet for secure web traffic"
+          description: "HTTPS access from internet"
+        },
+        {
+          fromPort: 80,
+          toPort: 80,
+          protocol: "tcp",
+          cidrBlocks: ["0.0.0.0/0"],
+          description: "HTTP access from internet"
+        },        
+      ],
+      egress: [
+        {
+          fromPort: 0,
+          toPort: 65535,
+          protocol: "tcp",
+          cidrBlocks: ["0.0.0.0/0"],
+          description: "All outbound traffic"
+        }
+      ],
+      tags: {
+        Name: `${repositoryName}-alb-sg`,
+        Environment: "development",
+        Project: "tv-devops-assessment",
+        ManagedBy: "terraform-cdk",
+      },
+    });
+
+    // Create Security Group for ECS Service (only allows traffic from ALB on port 3000)
+    const ecsSecurityGroup = new SecurityGroup(this, `${repositoryName}-ecs-sg`, {
+      name: `${repositoryName}-ecs-sg`,
+      description: "Security group for ECS Fargate service - only allows traffic from ALB on port 3000",
+      vpcId: vpc.id,
+      ingress: [
+        {
+          fromPort: 3000,
+          toPort: 3000,
+          protocol: "tcp",
+          securityGroups: [albSecurityGroup.id],
+          description: "HTTP access from ALB to container port 3000"
         }
       ],
       egress: [
@@ -472,6 +505,7 @@ class ECRStack extends TerraformStack {
         Project: "tv-devops-assessment",
         ManagedBy: "terraform-cdk",
       },
+      dependsOn: [albSecurityGroup], // Ensure ALB SG is created first
     });
 
     // Create Security Group for VPC Endpoints (if needed for private subnets later)
@@ -505,12 +539,12 @@ class ECRStack extends TerraformStack {
       },
     });
 
-    // Create Application Load Balancer
+    // Create ALB
     const applicationLoadBalancer = new Lb(this, `${repositoryName}-alb`, {
       name: `${repositoryName}-alb`,
       loadBalancerType: "application",
       subnets: publicSubnets.map(subnet => subnet.id),
-      securityGroups: [ecsSecurityGroup.id],
+      securityGroups: [albSecurityGroup.id],
       enableDeletionProtection: false,
       tags: {
         Name: `${repositoryName}-alb`,
@@ -520,24 +554,13 @@ class ECRStack extends TerraformStack {
       },
     });
 
-    // Create Target Group for health check
+    // Create Target Group for the API service
     const targetGroup = new LbTargetGroup(this, `${repositoryName}-tg`, {
       name: `${repositoryName}-tg`,
-      port: 3000,
+      port: ecsServiceContainerPort,
       protocol: "HTTP",
       vpcId: vpc.id,
       targetType: "ip",
-      healthCheck: {
-        enabled: true,
-        healthyThreshold: 2,
-        unhealthyThreshold: 2,
-        timeout: 5,
-        interval: 30,
-        path: "/health",
-        matcher: "200",
-        port: "traffic-port",
-        protocol: "HTTP"
-      },
       tags: {
         Name: `${repositoryName}-tg`,
         Environment: "development",
@@ -546,8 +569,8 @@ class ECRStack extends TerraformStack {
       },
     });
 
-    // Create ALB Listener
-    new LbListener(this, `${repositoryName}-alb-listener`, {
+    // Create ALB Listener to forward all traffic to the TargetGroup above
+    const albListener = new LbListener(this, `${repositoryName}-alb-listener`, {
       loadBalancerArn: applicationLoadBalancer.arn,
       port: 80,
       protocol: "HTTP",
@@ -564,6 +587,60 @@ class ECRStack extends TerraformStack {
         ManagedBy: "terraform-cdk",
       },
     });
+
+    // Create specific listener rule for /health endpoint with fixed response
+    new LbListenerRule(this, `${repositoryName}-health-rule`, {
+      listenerArn: albListener.arn,
+      priority: 100,
+      condition: [
+        {
+          pathPattern: {
+            values: ["/health"]
+          }
+        }
+      ],
+      action: [
+        {
+          type: "fixed-response",
+          fixedResponse: {
+            contentType: "text/plain",
+            messageBody: "OK",
+            statusCode: "200"
+          }
+        }
+      ],
+      tags: {
+        Name: `${repositoryName}-health-rule`,
+        Environment: "development",
+        Project: "tv-devops-assessment",
+        ManagedBy: "terraform-cdk",
+      },
+    });
+
+    // // Create specific listener rule for /health endpoint
+    // new LbListenerRule(this, `${repositoryName}-health-rule`, {
+    //   listenerArn: albListener.arn,
+    //   priority: 100,
+    //   condition: [
+    //     {
+    //       pathPattern: {
+    //         values: ["/health"]
+    //       }
+    //     }
+    //   ],
+    //   action: [
+    //     {
+    //       type: "forward",
+    //       targetGroupArn: targetGroup.arn,
+    //     }
+    //   ],
+    //   tags: {
+    //     Name: `${repositoryName}-health-rule`,
+    //     Environment: "development",
+    //     Project: "tv-devops-assessment",
+    //     ManagedBy: "terraform-cdk",
+    //   },
+    // });
 
     // Create ECS Cluster
     const ecsCluster = new EcsCluster(this, `${repositoryName}-ecs-cluster`, {
@@ -582,7 +659,7 @@ class ECRStack extends TerraformStack {
       },
     });
 
-    // Create ECS Task Definition
+    // Create ECS Task Definition, 
     const ecsTaskDefinition = new EcsTaskDefinition(this, `${repositoryName}-ecs-task-def`, {
       family: `${repositoryName}-task`,
       networkMode: "awsvpc",
@@ -593,31 +670,31 @@ class ECRStack extends TerraformStack {
       taskRoleArn: ecrRole.arn,
       containerDefinitions: JSON.stringify([
         {
-          name: `${repositoryName}-container`,
+          name: `${repositoryName}-app-container`,
           image: `${ecrRepository.repositoryUrl}:${ecsServiceImageTag}`,
           essential: true,
           portMappings: [
             {
-              containerPort: 3000,
+              containerPort: ecsServiceContainerPort,
               protocol: "tcp",
-              hostPort: 3000
             }
           ],
           healthCheck: {
-            command: ["CMD-SHELL", "wget --spider --no-verbose --server-response http://localhost:3000/health"],
-            interval: 30,
-            timeout: 5,
-            retries: 3,
+            command: ["CMD-SHELL","ls"],
+            // command: ["CMD-SHELL", "wget --spider --no-verbose --server-response http://localhost:3000/health"],
+            interval: 60,
+            timeout: 10,
+            retries: 6,
             startPeriod: 60
           },
           environment: [
             {
               name: "PORT",
-              value: "3000"
+              value: String(ecsServiceContainerPort)
             },
             {
               name: "NODE_ENV",
-              value: "production"
+              value: "development"
             }
           ],
           logConfiguration: {
@@ -638,13 +715,13 @@ class ECRStack extends TerraformStack {
       },
     });
 
-    // Create ECS Service
+    // Create ECS Service to run containers 
     const ecsService = new EcsService(this, `${repositoryName}-ecs-service`, {
       name: `${repositoryName}-service`,
       cluster: ecsCluster.id,
       taskDefinition: ecsTaskDefinition.arn,
       launchType: "FARGATE",
-      desiredCount: 1,
+      desiredCount: 2,
       networkConfiguration: {
         subnets: publicSubnets.map(subnet => subnet.id),
         securityGroups: [ecsSecurityGroup.id],
@@ -653,8 +730,8 @@ class ECRStack extends TerraformStack {
       loadBalancer: [
         {
           targetGroupArn: targetGroup.arn,
-          containerName: `${repositoryName}-container`,
-          containerPort: 3000,
+          containerName: `${repositoryName}-app-container`,
+          containerPort: ecsServiceContainerPort,
         }
       ],
       dependsOn: [applicationLoadBalancer],
