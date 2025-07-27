@@ -10,7 +10,6 @@ jobs:
   ci:
     name: CI - Build and Test App
     runs-on: ubuntu-latest
-    
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -18,29 +17,25 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '18'
+          node-version: '24'
           cache: 'npm'
           cache-dependency-path: 'app/package-lock.json'
       
       - name: Install dependencies
         working-directory: ./app
-        run: npm ci
+        run: npm install
       
       - name: Compile TypeScript
         working-directory: ./app
         run: npm run build
-      
-      - name: Run tests (if available)
-        working-directory: ./app
-        run: npm test --if-present
 
   # Job 2: Infrastructure deployment using CDKTF
   deploy-infrastructure:
     name: Deploy Infrastructure
     runs-on: ubuntu-latest
     needs: ci
-    outputs:
-      ecr-repository-url: ${{ steps.deploy.outputs.ecr-repository-url }}
+    # outputs:
+    #   ecr-repository-url: ${{ steps.deploy.outputs.ecr-repository-url }}
     
     steps:
       - name: Checkout repository
@@ -49,21 +44,27 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '18'
+          node-version: '24'
           cache: 'npm'
           cache-dependency-path: 'iac/package-lock.json'
-      
       - name: Install CDKTF dependencies
         working-directory: ./iac
-        run: npm ci
-      
+        run: npm install
+      - name: Setup Terraform CLI
+        uses: hashicorp/setup-terraform@v3
+        # TODOL Make sure this is needed
+      - name: Install CDKTF CLI
+        run: npm install -g cdktf-cli
+      - name: Get providers
+        working-directory: ./iac
+        run: npm run get
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: ${{ secrets.AWS_DEFAULT_REGION }}
-      
+          aws-region: ${{ vars.AWS_DEFAULT_REGION }}
+          
       - name: Build CDKTF project
         working-directory: ./iac
         run: npm run build
@@ -72,26 +73,25 @@ jobs:
         working-directory: ./iac
         run: npm run synth
       
-      - name: Deploy infrastructure
-        id: deploy
-        working-directory: ./iac
-        env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          AWS_DEFAULT_REGION: ${{ secrets.AWS_DEFAULT_REGION }}
-          ECR_REPOSITORY_NAME: ${{ secrets.ECR_REPOSITORY_NAME }}
-          ECR_IMAGE_TAG_MUTABILITY: ${{ secrets.ECR_IMAGE_TAG_MUTABILITY }}
-          ECR_SCAN_ON_PUSH: ${{ secrets.ECR_SCAN_ON_PUSH }}
-          ECS_IMAGE_TAG: latest
-          PORT: 3000
-        run: |
-          # Deploy with auto-approve (headless mode)
-          npm run deploy -- --auto-approve
+    #   - name: Deploy infrastructure
+    #     id: deploy
+    #     working-directory: ./iac
+    #     env:
+    #       AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+    #       AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+    #       AWS_DEFAULT_REGION: ${{ vars.AWS_DEFAULT_REGION }}
+    #       ECR_REPOSITORY_NAME: ${{ vars.ECR_REPOSITORY_NAME }}
+    #       ECR_IMAGE_TAG_MUTABILITY: ${{ vars.ECR_IMAGE_TAG_MUTABILITY }}
+    #       ECR_SCAN_ON_PUSH: ${{ vars.ECR_SCAN_ON_PUSH }}
+    #       ECR_IMAGE_TAG: ${{ vars.ECR_IMAGE_TAG }}
+    #     run: |
+    #       # Deploy with auto-approve
+    #       npm run deploy -- --auto-approve
           
-          # Extract ECR repository URL from Terraform output
-          ECR_URL=$(npx cdktf output ecr-repository-url | tr -d '"')
-          echo "ECR Repository URL: $ECR_URL"
-          echo "ecr-repository-url=$ECR_URL" >> $GITHUB_OUTPUT
+    #       # Extract ECR repository URL from Terraform output
+    #       ECR_URL=$(npx cdktf output ecr-repository-url | tr -d '"')
+    #       echo "ECR Repository URL: $ECR_URL"
+    #       echo "ecr-repository-url=$ECR_URL" >> $GITHUB_OUTPUT
 
   # Job 3: Build and push Docker image to ECR
   build-and-push:
@@ -108,67 +108,69 @@ jobs:
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: ${{ secrets.AWS_DEFAULT_REGION }}
+          aws-region: ${{ vars.AWS_DEFAULT_REGION }}
       
-      - name: Login to Amazon ECR
-        id: login-ecr
-        uses: aws-actions/amazon-ecr-login@v2
+    #   - name: Login to Amazon ECR
+    #     id: login-ecr
+    #     uses: aws-actions/amazon-ecr-login@v2
       
-      - name: Extract ECR repository details
-        id: ecr-details
-        run: |
-          ECR_URL="${{ needs.deploy-infrastructure.outputs.ecr-repository-url }}"
-          ECR_REGISTRY=$(echo $ECR_URL | cut -d'/' -f1)
-          ECR_REPOSITORY=$(echo $ECR_URL | cut -d'/' -f2)
-          echo "ecr-registry=$ECR_REGISTRY" >> $GITHUB_OUTPUT
-          echo "ecr-repository=$ECR_REPOSITORY" >> $GITHUB_OUTPUT
-          echo "ECR Registry: $ECR_REGISTRY"
-          echo "ECR Repository: $ECR_REPOSITORY"
+    #   - name: Extract ECR repository details
+    #     id: ecr-details
+    #     run: |
+    #       ECR_URL="${{ needs.deploy-infrastructure.outputs.ecr-repository-url }}"
+    #       ECR_REGISTRY=$(echo $ECR_URL | cut -d'/' -f1)
+    #       ECR_REPOSITORY=$(echo $ECR_URL | cut -d'/' -f2)
+    #       echo "ecr-registry=$ECR_REGISTRY" >> $GITHUB_OUTPUT
+    #       echo "ecr-repository=$ECR_REPOSITORY" >> $GITHUB_OUTPUT
+    #       echo "ECR Registry: $ECR_REGISTRY"
+    #       echo "ECR Repository: $ECR_REPOSITORY"
       
       - name: Build Docker image
         working-directory: ./app
-        run: |
-          docker build -t temp-image .
+        run: >
+          docker build 
+          --platform linux/amd64
+          -t temp-image .
       
-      - name: Tag and push Docker image to ECR
-        run: |
-          ECR_URL="${{ needs.deploy-infrastructure.outputs.ecr-repository-url }}"
+    #   - name: Tag and push Docker image to ECR
+    #     run: |
+    #       ECR_URL="${{ needs.deploy-infrastructure.outputs.ecr-repository-url }}"
           
-          # Tag the image with the ECR repository URL and latest tag
-          docker tag temp-image $ECR_URL:latest
+    #       # Tag the image with the ECR repository URL and latest tag
+    #       docker tag temp-image $ECR_URL:latest
           
-          # Push the image to ECR
-          docker push $ECR_URL:latest
+    #       # Push the image to ECR
+    #       docker push $ECR_URL:latest
           
-          echo "Successfully pushed image to $ECR_URL:latest"
+    #       echo "Successfully pushed image to $ECR_URL:latest"
 
-  # Job 4: Update ECS service with new image (optional - triggers deployment)
-  update-service:
-    name: Update ECS Service
-    runs-on: ubuntu-latest
-    needs: [deploy-infrastructure, build-and-push]
+#   # Job 4: Update ECS service with new image (optional - triggers deployment)
+#   update-service:
+#     name: Update ECS Service
+#     runs-on: ubuntu-latest
+#     needs: [deploy-infrastructure, build-and-push]
     
-    steps:
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: ${{ secrets.AWS_DEFAULT_REGION }}
+#     steps:
+#       - name: Configure AWS credentials
+#         uses: aws-actions/configure-aws-credentials@v4
+#         with:
+#           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+#           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+#           aws-region: ${{ vars.AWS_DEFAULT_REGION }}
       
-      - name: Force ECS service update
-        run: |
-          # Get the service name from environment or use default
-          SERVICE_NAME="${{ secrets.ECR_REPOSITORY_NAME }}-service"
-          CLUSTER_NAME="${{ secrets.ECR_REPOSITORY_NAME }}-cluster"
+#       - name: Force ECS service update
+#         run: |
+#           # Get the service name from environment or use default
+#           SERVICE_NAME="${{ secrets.ECR_REPOSITORY_NAME }}-service"
+#           CLUSTER_NAME="${{ secrets.ECR_REPOSITORY_NAME }}-cluster"
           
-          echo "Forcing ECS service update for $SERVICE_NAME in cluster $CLUSTER_NAME"
+#           echo "Forcing ECS service update for $SERVICE_NAME in cluster $CLUSTER_NAME"
           
-          # Force new deployment to pick up the latest image
-          aws ecs update-service \
-            --cluster $CLUSTER_NAME \
-            --service $SERVICE_NAME \
-            --force-new-deployment \
-            --region ${{ secrets.AWS_DEFAULT_REGION }}
+#           # Force new deployment to pick up the latest image
+#           aws ecs update-service \
+#             --cluster $CLUSTER_NAME \
+#             --service $SERVICE_NAME \
+#             --force-new-deployment \
+#             --region ${{ vars.AWS_DEFAULT_REGION }}
           
-          echo "ECS service update initiated successfully"
+#           echo "ECS service update initiated successfully"

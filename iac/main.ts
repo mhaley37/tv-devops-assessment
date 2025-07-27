@@ -57,7 +57,7 @@ class ECRStack extends TerraformStack {
     const repositoryName = process.env.ECR_REPOSITORY_NAME ?? "tv-devops-assessment";
     const imageTagMutability = process.env.ECR_IMAGE_TAG_MUTABILITY ?? "MUTABLE";
     const scanOnPush = process.env.ECR_SCAN_ON_PUSH === "true";
-    const ecsServiceImageTag = process.env.ECS_IMAGE_TAG ?? 'latest';
+    const ecrImageTag = process.env.ECR_IMAGE_TAG ?? 'latest';
     const ecsServiceContainerPort = Number(process.env.PORT) ?? 3000; // Make this more durable
 
     // Create VPC for ECS service
@@ -617,31 +617,6 @@ class ECRStack extends TerraformStack {
       },
     });
 
-    // // Create specific listener rule for /health endpoint
-    // new LbListenerRule(this, `${repositoryName}-health-rule`, {
-    //   listenerArn: albListener.arn,
-    //   priority: 100,
-    //   condition: [
-    //     {
-    //       pathPattern: {
-    //         values: ["/health"]
-    //       }
-    //     }
-    //   ],
-    //   action: [
-    //     {
-    //       type: "forward",
-    //       targetGroupArn: targetGroup.arn,
-    //     }
-    //   ],
-    //   tags: {
-    //     Name: `${repositoryName}-health-rule`,
-    //     Environment: "development",
-    //     Project: "tv-devops-assessment",
-    //     ManagedBy: "terraform-cdk",
-    //   },
-    // });
-
     // Create ECS Cluster
     const ecsCluster = new EcsCluster(this, `${repositoryName}-ecs-cluster`, {
       name: `${repositoryName}-cluster`,
@@ -671,7 +646,7 @@ class ECRStack extends TerraformStack {
       containerDefinitions: JSON.stringify([
         {
           name: `${repositoryName}-app-container`,
-          image: `${ecrRepository.repositoryUrl}:${ecsServiceImageTag}`,
+          image: `${ecrRepository.repositoryUrl}:${ecrImageTag}`,
           essential: true,
           portMappings: [
             {
