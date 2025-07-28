@@ -6,8 +6,11 @@ on:
     branches:
       - main
 
+defaults:
+   run: { shell: bash }
+
 jobs:
-  # Job 1: CI - Build and test the TypeScript application
+
   ci:
     name: CI - Build and Test App
     runs-on: ubuntu-latest
@@ -21,7 +24,6 @@ jobs:
           node-version: '24'
           cache: 'npm'
           cache-dependency-path: 'app/package-lock.json'
-      
       - name: Install dependencies
         working-directory: ./app
         run: npm install
@@ -30,48 +32,59 @@ jobs:
         working-directory: ./app
         run: npm run build
 
-  # Job 2: Infrastructure deployment using CDKTF
   deploy-infrastructure:
     name: Deploy Infrastructure
     runs-on: ubuntu-latest
     needs: ci
     outputs:
-      ecr-repository-url: ${{ steps.deploy.outputs.ecr-repository-url }}
-    
+      ecr-repository-url: ${{ steps.get-repo-url.outputs.ecr-repository-url }}
+    env:
+        AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        AWS_REGION: ${{ vars.AWS_REGION }}
+        ECR_REPOSITORY_NAME: ${{ vars.ECR_REPOSITORY_NAME }}
+        ECR_IMAGE_TAG: ${{ vars.ECR_IMAGE_TAG }}
+        ECR_IMAGE_TAG_MUTABILITY: ${{ vars.ECR_IMAGE_TAG_MUTABILITY }}
+        ECR_SCAN_ON_PUSH: ${{ vars.ECR_SCAN_ON_PUSH }}
+        ECS_CONTAINER_PORT: ${{ vars.ECS_CONTAINER_PORT }}
+        TF_STATE_BUCKET: ${{ vars.TF_STATE_BUCKET }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-      
-      - name: Setup and Build CDKTF
-        uses: ./.github/actions/setup-cdktf
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
         with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: ${{ vars.AWS_DEFAULT_REGION }}
-    
-    # TODO: For now , don't deploy until I hook up remote backend
-    #   - name: Deploy infrastructure
-    #     id: deploy
-    #     working-directory: ./iac
-    #     env:
-    #       AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
-    #       AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-    #       AWS_DEFAULT_REGION: ${{ vars.AWS_DEFAULT_REGION }}
-    #       ECR_REPOSITORY_NAME: ${{ vars.ECR_REPOSITORY_NAME }}
-    #       ECR_IMAGE_TAG_MUTABILITY: ${{ vars.ECR_IMAGE_TAG_MUTABILITY }}
-    #       ECR_SCAN_ON_PUSH: ${{ vars.ECR_SCAN_ON_PUSH }}
-    #       ECR_IMAGE_TAG: ${{ vars.ECR_IMAGE_TAG }}
-    #       ECS_CONTAINER_PORT: ${{ vars.ECS_CONTAINER_PORT }}
-    #     run: |
-    #       npm run deploy -- --auto-approve
-    
-    #       ECR_URL=$(npx cdktf output ecr-repository-url | tr -d '"')
-    #       echo "ECR Repository URL: $ECR_URL"
-    #       echo "ecr-repository-url=$ECR_URL" >> $GITHUB_OUTPUT
+          node-version: 24
+          cache: npm
+          cache-dependency-path: iac/package-lock.json
+      - name: Setup Terraform CLI
+        uses: hashicorp/setup-terraform@v3
+      - name: Install cdktf cli
+        run: npm install -g cdktf-cli   
+      - name: Install CDKTF dependencies
+        working-directory: ./iac
+        run: npm install      
+      - name: Get providers
+        working-directory: ./iac
+        run: npm run get
+      - name: Synthesize CDKTF
+        working-directory: ./iac
+        run: npm run synth
+      - name: Deploy infrastructure
+        id: deploy
+        working-directory: ./iac
+        run: npm run deploy -- --auto-approve
+      - name: Get ECR Repo URL
+        id: get-repo-url
+        working-directory: ./iac
+        run: |
+          npx cdktf outputs --skip-synth --outputs-file temp-values.json
+          ECR_URL=$(yq '.ecr-app-instance.ecr-repository-url' temp-values.json | tr -d '"')
+          echo "ECR Repository URL: $ECR_URL"
+          echo "ecr-repository-url=$ECR_URL" >> $GITHUB_OUTPUT
 
-  # Job 3: Build and push Docker image to ECR
   build-and-push:
-    name: Build and Push Docker Image
+    name: Build and Push Docker Image to ECR repository
     runs-on: ubuntu-latest
     needs: deploy-infrastructure
     
@@ -84,22 +97,11 @@ jobs:
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: ${{ vars.AWS_DEFAULT_REGION }}
+          aws-region: ${{ vars.AWS_REGION }}
       
       - name: Login to Amazon ECR
         id: login-ecr
         uses: aws-actions/amazon-ecr-login@v2
-      
-      - name: Extract ECR repository details
-        id: ecr-details
-        run: |
-          ECR_URL="${{ needs.deploy-infrastructure.outputs.ecr-repository-url }}"
-          ECR_REGISTRY=$(echo $ECR_URL | cut -d'/' -f1)
-          ECR_REPOSITORY=$(echo $ECR_URL | cut -d'/' -f2)
-          echo "ecr-registry=$ECR_REGISTRY" >> $GITHUB_OUTPUT
-          echo "ecr-repository=$ECR_REPOSITORY" >> $GITHUB_OUTPUT
-          echo "ECR Registry: $ECR_REGISTRY"
-          echo "ECR Repository: $ECR_REPOSITORY"
       
       - name: Build Docker image
         working-directory: ./app

@@ -1,53 +1,85 @@
-# ECR + ECS Fargate Infrastructure with CDKTF
+# ECS (Fargate) based CKDTF project for DevOps Assement
 
 This project uses Terraform CDK (CDKTF) to create and manage:
 - AWS Elastic Container Registry (ECR) repository
-- AWS ECS Fargate service with associated infrastructure
-- VPC with public subnets and networking components
-- IAM roles for secure access
+- AWS ECS Fargate service with associated infrastructure for running the app ()
+- Application Load Balancer ( ALM ) with publicly accessible `/health` endpoint
+- IAM roles & Security groups using the principle of least privelage
 
-## Infrastructure Components
 
-This CDKTF project creates the following AWS resources:
+## Deloyment Prerequisites 
 
-### Container Infrastructure
-- **ECR Repository**: Container image registry with encryption and vulnerability scanning
-- **ECS Fargate Cluster**: Serverless container orchestration
-- **ECS Service**: Manages container instances with auto-scaling capabilities
-- **ECS Task Definition**: Defines container specifications and resource requirements
+- AWS credentials ( An access Key ID as well as a secret Key )
+- An S3 bucket created to act as a remote backend for terraform operations
+  - The prinipal associated with the credentials needs to have access to the `"s3:ListBucket` action as well as the `s3:GetObject` & `s3:PutObject` actions on the `terraform.tfstate` key of that bucket
 
-### Networking
-- **VPC**: Isolated network environment (10.0.0.0/16)
-- **Public Subnets**: Two subnets across different availability zones
-- **Internet Gateway**: Provides internet access for containers
-- **Route Tables**: Network routing configuration
-- **Security Group**: Firewall rules for ECS service (HTTP/HTTPS access)
-
-### Security & Access
-- **ECR Access IAM Role**: Dedicated role for ECR push/pull operations
-- **ECS Task Execution Role**: Role for ECS to pull images and write logs
-- **Repository Policy**: Restricts ECR access to specific roles only
-- **Security Groups**: Network-level access control
-
-## Prerequisites
-
+### Local deploy prerequisites
 - Node.js 20.9+
-- AWS CLI configured or AWS credentials
 - Docker (for pushing images to ECR)
+- `cdktf-cli` npm package installed globally fow cli commands in scripts
 
-## Quick Start
+## How to Deploy
 
-1. **Setup the project:**
+This infrastructure allowed configuration through a number of Environment variables that are interpolated during the deployment. A valid AWS Access Key ID, secret KEY and and the name of the S3 bucket that will be used are required. Other configurations are optional, with default values
+
+### Deploy via CICD pipeline with GitHub Actions (Preferred Method)
+
+The GitHub Action workflow `cicd` (`.github/workflows/cicd.yml`) is used to both validate and deploy the app and infrastructure when a commit is merged to `main`.
+
+Configuration is done via the GitHub Actions [secrets](`https://github.com/mhaley37/tv-devops-assessment/settings/secrets/actions`) ( and [variables](https://github.com/mhaley37/tv-devops-assessment/settings/variables/actions) ) in the  path of the GitHub. If any of these values need to be changed:
+
+1. Make the changes to the GitHub actions secrets and variables
+2. Run the `cicd` pipeline directly from GitHub Actions ( `workflow_dispatch` )
+
+Secrets:
+
+| S Name | Required | Description |
+|-------------|----------|-------------|
+| `AWS_ACCESS_KEY_ID` | Yes | AWS access key ID for authentication |
+| `AWS_SECRET_ACCESS_KEY` | Yes | AWS secret access key for authentication |
+
+Variables 
+|  Name | Required | Default | Description |
+|-------------|----------|-------------|
+| `AWS_REGION` | No | us-east-1 | AWS region to use |
+| `ECR_FORCE_DELETE` | No | true | true to allow ECR repo to be deleted if not empty |
+| `ECR_IMAGE_TAG` | No | us-east-1 | latest | Tag to use for the image to deployed for the app server |
+| `ECR_IMAGE_TAG_MUTABILITY` | No | us-east-1 | MUTABLE | MUTABLE if tags can be pushed with the same tag ( for different digets )|
+| `ECR_REPOSITORY_NAME` | No | us-east-1 | tv-devops-assessment | Name to use for the ECR repo and also used as prefix |
+| `ECR_SCAN_ON_PUSH` | No | us-east-1 | true | true if scan for vulnerabilities should be done when the image is pushed to ECR |
+| `ECS_CONTAINER_PORT` | No | us-east-1 | 3000 | Port the the container in the ECS service is listening on |
+| `TF_STATE_BUCKET` | Yes | S3 bucket name to use as remote backend |
+
+
+### Deploy locally
+1. **Install npm dependencies:**
    ```bash
-   npm run setup
+   npm install
    ```
 
 2. **Configure AWS credentials:**
-   Edit the `.env` file with your AWS credentials:
+   
+   There is an `.env.example` file in this path that can be used to change the configuration. Steps to do so are:
+
    ```bash
    cp .env.example .env
-   # Edit .env with your AWS credentials
+   # Edit each configuration value wiht your own values
+   # Non-Required configuration values are set with placeholder default values
    ```
+    Configure these variables in your `.env` file:
+
+    | Variable | Required | Default | Description |
+    |----------|----------|---------|-------------|
+    | `AWS_ACCESS_KEY_ID` | Yes | - | AWS access key ID |
+    | `AWS_SECRET_ACCESS_KEY` | Yes | - | AWS secret access key |
+    | `AWS_REGION` | Yes | us-east-1 | AWS region for ECR |
+    | `ECR_FORCE_DELETE` | No | true | Allow ECR repo to be deleted if not empty |
+    | `ECR_IMAGE_TAG` | No | edge | Tag to use for the image deployed for the app server |
+    | `ECR_IMAGE_TAG_MUTABILITY` | No | MUTABLE | Image tag mutability (MUTABLE/IMMUTABLE) |
+    | `ECR_REPOSITORY_NAME` | No | tv-devops-assessment | ECR repository name |
+    | `ECR_SCAN_ON_PUSH` | No | true | Enable vulnerability scanning on push |
+    | `ECS_CONTAINER_PORT` | No | 3000 | Port the container in the ECS service is listening on |
+    | `TF_STATE_BUCKET` | Yes | - | S3 bucket name to use as remote backend |
 
 3. **Download AWS provider:**
    ```bash
@@ -59,122 +91,8 @@ This CDKTF project creates the following AWS resources:
    npm run synth
    ```
 
-5. **Deploy the ECR repository:**
+5. **Deploy the application stack:**
    ```bash
    npm run deploy
    ```
-
-## Environment Variables
-
-Configure these variables in your `.env` file:
-
-| Variable | Required | Default | Description |
-|----------|----------|---------|-------------|
-| `AWS_ACCESS_KEY_ID` | Yes | - | AWS access key ID |
-| `AWS_SECRET_ACCESS_KEY` | Yes | - | AWS secret access key |
-| `AWS_REGION` | Yes | us-east-1 | AWS region for ECR |
-| `ECR_REPOSITORY_NAME` | No | tv-devops-assessment | ECR repository name |
-| `ECR_IMAGE_TAG_MUTABILITY` | No | MUTABLE | Image tag mutability (MUTABLE/IMMUTABLE) |
-| `ECR_SCAN_ON_PUSH` | No | true | Enable vulnerability scanning on push |
-
-## AWS Credentials Setup
-
-### Environment Variables (Development)
-```bash
-# In .env file
-AWS_ACCESS_KEY_ID=your_access_key
-AWS_SECRET_ACCESS_KEY=your_secret_key
-AWS_REGION=us-east-1
 ```
-
-
-## Required AWS Permissions
-
-The AWS credentials need the following ECR permissions:
-```json
-{
-  "Version": "2012-10-17",
-  "Statement": [
-    {
-      "Effect": "Allow",
-      "Action": [
-        "ecr:CreateRepository",
-        "ecr:DeleteRepository",
-        "ecr:DescribeRepositories",
-        "ecr:PutRepositoryPolicy",
-        "ecr:DeleteRepositoryPolicy",
-        "ecr:SetRepositoryPolicy",
-        "ecr:GetRepositoryPolicy"
-      ],
-      "Resource": "*"
-    }
-  ]
-}
-```
-
-## Using the ECR Repository
-
-After deployment, you'll get outputs including:
-- ECR Repository URL
-- Docker login command
-
-### Push an image to ECR:
-
-1. **Authenticate Docker:**
-   ```bash
-   aws ecr get-login-password --region us-east-1 | docker login --username AWS --password-stdin <repository-url>
-   ```
-
-2. **Tag your image:**
-   ```bash
-   docker tag your-app:latest <repository-url>:latest
-   ```
-
-3. **Push the image:**
-   ```bash
-   docker push <repository-url>:latest
-   ```
-
-## Project Structure
-
-```
-iac/
-├── main.ts              # Main CDKTF stack definition
-├── package.json         # Node.js dependencies and scripts
-├── cdktf.json          # CDKTF configuration
-├── .env.example        # Environment variables template
-├── .env                # Your environment variables (gitignored)
-├── setup-assistant.js  # Setup helper script
-└── README.md           # This file
-```
-
-## Security Best Practices
-
-- ✅ Never commit `.env` files to version control
-- ✅ Use IAM roles in production instead of access keys
-- ✅ Regularly rotate access keys
-- ✅ Follow principle of least privilege for permissions
-- ✅ Enable ECR image scanning (enabled by default)
-- ✅ Use encryption at rest (enabled by default)
-
-## Troubleshooting
-
-### Common Issues:
-
-1. **"Unable to locate credentials"**
-   - Check your `.env` file has correct AWS credentials
-   - Ensure AWS CLI is configured if using profiles
-
-2. **"Repository already exists"**
-   - ECR repository names must be unique within an AWS account
-   - Change `ECR_REPOSITORY_NAME` in `.env` file
-
-3. **Permission denied errors**
-   - Verify your AWS credentials have ECR permissions
-   - Check IAM policies attached to your user/role
-
-### Getting Help:
-
-- Check AWS CloudTrail for detailed error logs
-- Use `npm run diff` to see what changes will be made
-- Run `npm run synth` to validate configuration locally

@@ -3,7 +3,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    ports: ["${HOST_PORT:-3000}:${PORT:-3000}"]
+    ports: ["3000:3000"]
     command: ["npm", "run", "dev"] # Use the npm dev script for dev work
     env_file:
       - .env

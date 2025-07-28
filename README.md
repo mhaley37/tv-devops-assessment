@@ -1,3 +1,5 @@
+[![CI/CD](https://github.com/mhaley37/tv-devops-assessment/actions/workflows/cicd.yml/badge.svg?event=push)](https://github.com/mhaley37/tv-devops-assessment/actions/workflows/cicd.yml)
+
 # 🚀 DevOps Assessment – Full Lifecycle Challenge
 
 **Estimated Time:** 4–8 hours

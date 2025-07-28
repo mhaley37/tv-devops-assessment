@@ -1,5 +1,5 @@
 import { Construct } from "constructs";
-import { App, TerraformStack, TerraformOutput } from "cdktf";
+import { App, TerraformStack, TerraformOutput, S3Backend } from "cdktf";
 import { AwsProvider } from "@cdktf/provider-aws/lib/provider";
 import { EcrRepository } from "@cdktf/provider-aws/lib/ecr-repository";
 import { IamRole } from "@cdktf/provider-aws/lib/iam-role";
@@ -31,18 +31,35 @@ class ECRAppInstance extends TerraformStack {
     super(scope, id);
 
     // Validate required environment variables
-    const requiredVars = ['AWS_ACCESS_KEY_ID', 'AWS_SECRET_ACCESS_KEY', 'AWS_DEFAULT_REGION'];
+    const requiredVars = ['AWS_ACCESS_KEY_ID', 'AWS_SECRET_ACCESS_KEY', 'AWS_REGION', 'TF_STATE_BUCKET'];
     for (const varName of requiredVars) {
       if (!process.env[varName]) {
         throw new Error(`Required environment variable ${varName} is not set. Please check your .env file.`);
       }
     }
 
+    // Get configuration from environment variables with defaults
+    const awsKeyId = process.env.AWS_ACCESS_KEY_ID!;
+    const tfStateBucket = process.env.TF_STATE_BUCKET!;
+    const awsSecretAccessKey = process.env.AWS_SECRET_ACCESS_KEY!;
+    const awsRegion =  'us-east-1';
+    const projectName = process.env.ECR_REPOSITORY_NAME ?? "tv-devops-assessment";
+    const imageTagMutability = process.env.ECR_IMAGE_TAG_MUTABILITY ?? "MUTABLE";
+    const ecrForceDelete = process.env.ECR_FORCE_DELETE === "true";
+    const ecrScanOnPush = process.env.ECR_SCAN_ON_PUSH === "true";
+    const ecrImageTag = process.env.ECR_IMAGE_TAG ?? 'latest';
+    const ecsServiceContainerPort = Number(process.env.ECS_CONTAINER_PORT) ?? 3000;
+
+    const isValidEcsContainerPort = (port: number) => (!isNaN(port) && Number.isInteger(port) && port > 0);
+      if (process.env.ECS_CONTAINER_PORT && !isValidEcsContainerPort(ecsServiceContainerPort)) {
+        throw new Error(`Invalid ECS_CONTAINER_PORT: ${process.env.ECS_CONTAINER_PORT}`);
+      }
+
     // Configure AWS Provider with environment variables
     new AwsProvider(this, "aws", {
-      region: process.env.AWS_DEFAULT_REGION || "us-east-1",
-      accessKey: process.env.AWS_ACCESS_KEY_ID,
-      secretKey: process.env.AWS_SECRET_ACCESS_KEY,
+      region: awsRegion,
+      accessKey: awsKeyId,
+      secretKey: awsSecretAccessKey,
     });
 
     // Get current AWS account information
@@ -53,18 +70,16 @@ class ECRAppInstance extends TerraformStack {
       state: "available"
     });
 
-    // Get configuration from environment variables with defaults
-    const projectName = process.env.ECR_REPOSITORY_NAME ?? "tv-devops-assessment";
-    const imageTagMutability = process.env.ECR_IMAGE_TAG_MUTABILITY ?? "MUTABLE";
-    const ecrForceDelete = process.env.ECR_FORCE_DELETE === "true";
-    const ecrScanOnPush = process.env.ECR_SCAN_ON_PUSH === "true";
-    const ecrImageTag = process.env.ECR_IMAGE_TAG ?? 'latest';
-    const ecsServiceContainerPort = Number(process.env.ECS_CONTAINER_PORT) ?? 3000; // Make this more durable
+    // Configure S3 backend for remote state
+    new S3Backend(this, {
+      bucket: tfStateBucket,
+      key: "terraform.tfstate",
+      region: awsRegion,
+      encrypt: true,
+      // accessKey: awsKeyId,
+      // secretKey: awsSecretAccessKey,
+    });
 
-    const isValidEcsContainerPort = (port: number) => (!isNaN(port) && Number.isInteger(port) && port > 0);
-    if (process.env.ECS_CONTAINER_PORT && !isValidEcsContainerPort(ecsServiceContainerPort)) {
-      throw new Error(`Invalid ECS_CONTAINER_PORT: ${process.env.ECS_CONTAINER_PORT}`);
-    }
 
     // Create VPC for ECS service
     const vpc = new Vpc(this, `${projectName}-vpc`, {
@@ -170,7 +185,7 @@ class ECRAppInstance extends TerraformStack {
             Action: "sts:AssumeRole",
             Condition: {
               StringEquals: {
-                "aws:RequestedRegion": process.env.AWS_DEFAULT_REGION
+                "aws:RequestedRegion": awsRegion
               }
             }
           }
@@ -200,7 +215,7 @@ class ECRAppInstance extends TerraformStack {
             Resource: "*",
             Condition: {
               StringEquals: {
-                "aws:RequestedRegion": process.env.AWS_DEFAULT_REGION
+                "aws:RequestedRegion": awsRegion
               }
             }
           },
@@ -221,7 +236,7 @@ class ECRAppInstance extends TerraformStack {
               "logs:CreateLogStream",
               "logs:PutLogEvents"
             ],
-            Resource: `arn:aws:logs:${process.env.AWS_DEFAULT_REGION}:${currentIdentity.accountId}:log-group:/ecs/${projectName}:*`
+            Resource: `arn:aws:logs:${awsRegion}:${currentIdentity.accountId}:log-group:/ecs/${projectName}:*`
           }
         ]
       })
@@ -241,7 +256,7 @@ class ECRAppInstance extends TerraformStack {
             Action: "sts:AssumeRole",
             Condition: {
               StringEquals: {
-                "aws:RequestedRegion": process.env.AWS_DEFAULT_REGION
+                "aws:RequestedRegion": awsRegion
               }
             }
           }
@@ -271,7 +286,7 @@ class ECRAppInstance extends TerraformStack {
             Resource: "*",
             Condition: {
               StringEquals: {
-                "aws:RequestedRegion": process.env.AWS_DEFAULT_REGION
+                "aws:RequestedRegion": awsRegion
               }
             }
           },
@@ -294,8 +309,8 @@ class ECRAppInstance extends TerraformStack {
               "logs:PutLogEvents"
             ],
             Resource: [
-              `arn:aws:logs:${process.env.AWS_DEFAULT_REGION}:${currentIdentity.accountId}:log-group:/ecs/${projectName}`,
-              `arn:aws:logs:${process.env.AWS_DEFAULT_REGION}:${currentIdentity.accountId}:log-group:/ecs/${projectName}:*`
+              `arn:aws:logs:${awsRegion}:${currentIdentity.accountId}:log-group:/ecs/${projectName}`,
+              `arn:aws:logs:${awsRegion}:${currentIdentity.accountId}:log-group:/ecs/${projectName}:*`
             ]
           }
         ]
@@ -316,7 +331,7 @@ class ECRAppInstance extends TerraformStack {
             Action: "sts:AssumeRole",
             Condition: {
               StringEquals: {
-                "aws:RequestedRegion": process.env.AWS_DEFAULT_REGION
+                "aws:RequestedRegion": awsRegion
               }
             }
           }
@@ -374,7 +389,7 @@ class ECRAppInstance extends TerraformStack {
             Resource: "*",
             Condition: {
               StringEquals: {
-                "aws:RequestedRegion": process.env.AWS_DEFAULT_REGION
+                "aws:RequestedRegion": awsRegion
               }
             }
           },
@@ -399,7 +414,7 @@ class ECRAppInstance extends TerraformStack {
               "logs:DescribeLogGroups",
               "logs:DescribeLogStreams"
             ],
-            Resource: `arn:aws:logs:${process.env.AWS_DEFAULT_REGION}:${currentIdentity.accountId}:log-group:/ecs/${projectName}*`
+            Resource: `arn:aws:logs:${awsRegion}:${currentIdentity.accountId}:log-group:/ecs/${projectName}*`
           }
         ]
       })
@@ -663,7 +678,7 @@ class ECRAppInstance extends TerraformStack {
             logDriver: "awslogs",
             options: {
               "awslogs-group": logGroup.name,
-              "awslogs-region": process.env.AWS_DEFAULT_REGION,
+              "awslogs-region": awsRegion,
               "awslogs-stream-prefix": "ecs"
             }
           }
@@ -732,7 +747,7 @@ class ECRAppInstance extends TerraformStack {
     });
 
     new TerraformOutput(this, "docker-login-command", {
-      value: `aws ecr get-login-password --region ${process.env.AWS_DEFAULT_REGION} | docker login --username AWS --password-stdin ${ecrRepository.repositoryUrl}`,
+      value: `aws ecr get-login-password --region ${awsRegion} | docker login --username AWS --password-stdin ${ecrRepository.repositoryUrl}`,
       description: "Command to authenticate Docker with ECR",
     });
 
