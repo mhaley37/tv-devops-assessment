@@ -5,22 +5,16 @@ services:
       dockerfile: Dockerfile
     ports: ["3000:3000"]
     command: ["npm", "run", "dev"] # Use the npm dev script for dev work
-    env_file:
-      - .env
     environment:
       - NODE_ENV=development
     restart: unless-stopped
     image: app-server
     healthcheck:
-      test: ["CMD", "sh", "-c", "wget --spider --no-verbose --server-response http://localhost:3000"]
+      test: ["CMD", "sh", "-c", "wget --spider --no-verbose --server-response http://localhost:3000/health"]
       interval: 30s
       timeout: 30s
       retries: 1
       start_period: 30s
     volumes:
       - .:/app
-      # Using host node_modules makes local testing easier because we only have to run `npm install` locally to update dependencies for the compose stack
-      # rather than rebuilding the image.
-      # However, this could cause issues if some of the binaries in node_modules are different between the host and container architectures.
-      # Solution would be to volume the local files you need except for /node_modules
       - ./node_modules:/app/node_modules 

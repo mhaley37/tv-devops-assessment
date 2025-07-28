@@ -20,7 +20,6 @@ import { CloudwatchLogGroup } from "@cdktf/provider-aws/lib/cloudwatch-log-group
 import { LbTargetGroup } from "@cdktf/provider-aws/lib/lb-target-group";
 import { Lb } from "@cdktf/provider-aws/lib/lb";
 import { LbListener } from "@cdktf/provider-aws/lib/lb-listener";
-import { LbListenerRule } from "@cdktf/provider-aws/lib/lb-listener-rule";
 import * as dotenv from "dotenv";
 
 // Load environment variables from .env file
@@ -568,7 +567,7 @@ class ECRAppInstance extends TerraformStack {
     });
 
     // Create ALB Listener to forward all traffic to the TargetGroup above
-    const albListener = new LbListener(this, `${projectName}-alb-listener`, {
+    new LbListener(this, `${projectName}-alb-listener`, {
       loadBalancerArn: applicationLoadBalancer.arn,
       port: 80,
       protocol: "HTTP",
@@ -580,35 +579,6 @@ class ECRAppInstance extends TerraformStack {
       ],
       tags: {
         Name: `${projectName}-alb-listener`,
-        Environment: "development",
-        Project: projectName,
-        ManagedBy: "terraform-cdk",
-      },
-    });
-
-    // Create specific listener rule for /health endpoint with fixed response
-    new LbListenerRule(this, `${projectName}-health-rule`, {
-      listenerArn: albListener.arn,
-      priority: 100,
-      condition: [
-        {
-          pathPattern: {
-            values: ["/health"]
-          }
-        }
-      ],
-      action: [
-        {
-          type: "fixed-response",
-          fixedResponse: {
-            contentType: "text/plain",
-            messageBody: "OK",
-            statusCode: "200"
-          }
-        }
-      ],
-      tags: {
-        Name: `${projectName}-health-rule`,
         Environment: "development",
         Project: projectName,
         ManagedBy: "terraform-cdk",
@@ -653,7 +623,7 @@ class ECRAppInstance extends TerraformStack {
             }
           ],
           healthCheck: {
-            command: ["CMD-SHELL", `wget --spider --no-verbose --server-response http://localhost:${ecsServiceContainerPort}`],
+            command: ["CMD-SHELL", `wget --spider --no-verbose --server-response http://localhost:${ecsServiceContainerPort}/health`],
             interval: 60,
             timeout: 10,
             retries: 3,
