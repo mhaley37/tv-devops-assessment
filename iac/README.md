@@ -1,17 +1,17 @@
-# ECS (Fargate) based CKDTF project for DevOps Assement
+# ECS (Fargate) based CKDTF project for DevOps assessment
 
 This project uses Terraform CDK (CDKTF) to create and manage:
 - AWS Elastic Container Registry (ECR) repository
 - AWS ECS Fargate service with associated infrastructure for running the app ()
 - Application Load Balancer ( ALM ) with publicly accessible `/health` endpoint
-- IAM roles & Security groups using the principle of least privelage
+- IAM roles & Security groups using the principle of least privilege
 
 
-## Deloyment Prerequisites 
+## Deployment Prerequisites 
 
 - AWS credentials ( An access Key ID as well as a secret Key )
 - An S3 bucket created to act as a remote backend for terraform operations
-  - The prinipal associated with the credentials needs to have access to the `"s3:ListBucket` action as well as the `s3:GetObject` & `s3:PutObject` actions on the `terraform.tfstate` key of that bucket
+  - The principal associated with the credentials needs to have access to the `"s3:ListBucket` action as well as the `s3:GetObject` & `s3:PutObject` actions on the `terraform.tfstate` key of that bucket
 
 ### Local deploy prerequisites
 - Node.js 20.9+
@@ -63,7 +63,7 @@ Variables
 
    ```bash
    cp .env.example .env
-   # Edit each configuration value wiht your own values
+   # Edit each configuration value with your own values
    # Non-Required configuration values are set with placeholder default values
    ```
     Configure these variables in your `.env` file:
@@ -95,4 +95,12 @@ Variables
    ```bash
    npm run deploy
    ```
-```
+
+## How to Destroy
+
+### Destroy via CICD pipeline with GitHub Actions (Preferred Method)
+The GitHub Action workflow `cicd` (`.github/workflows/destroy-infrastructure.yml`) can be used to destroy a previously deployed infrastructure
+
+### Destroy locally
+
+Follow the above "Deploy locally" steps, and instead of running `npm run deploy` run `npm run destroy`

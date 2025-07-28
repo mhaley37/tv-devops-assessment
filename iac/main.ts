@@ -38,7 +38,7 @@ class ECRAppInstance extends TerraformStack {
       }
     }
 
-    // Get configuration from environment variables with defaults
+    // Get configuration from environment variables
     const awsKeyId = process.env.AWS_ACCESS_KEY_ID!;
     const tfStateBucket = process.env.TF_STATE_BUCKET!;
     const awsSecretAccessKey = process.env.AWS_SECRET_ACCESS_KEY!;
@@ -55,7 +55,6 @@ class ECRAppInstance extends TerraformStack {
         throw new Error(`Invalid ECS_CONTAINER_PORT: ${process.env.ECS_CONTAINER_PORT}`);
       }
 
-    // Configure AWS Provider with environment variables
     new AwsProvider(this, "aws", {
       region: awsRegion,
       accessKey: awsKeyId,
@@ -76,12 +75,10 @@ class ECRAppInstance extends TerraformStack {
       key: "terraform.tfstate",
       region: awsRegion,
       encrypt: true,
-      // accessKey: awsKeyId,
-      // secretKey: awsSecretAccessKey,
     });
 
 
-    // Create VPC for ECS service
+    // Create VPC for this ECS based app
     const vpc = new Vpc(this, `${projectName}-vpc`, {
       cidrBlock: "10.0.0.0/16",
       enableDnsHostnames: true,
@@ -105,7 +102,7 @@ class ECRAppInstance extends TerraformStack {
       },
     });
 
-    // Create public subnets ( limit to 2 Azs for now)
+    // Create public subnets ( limit to 2 for now to keep costs low for testing )
     const publicSubnets: Subnet[] = [];
     for (let i = 0; i < 2; i++) {
       const subnet = new Subnet(this, `${projectName}-subnet-${i + 1}`, {
@@ -150,7 +147,7 @@ class ECRAppInstance extends TerraformStack {
       });
     });
 
-    // ECR Repository
+    // Create new ECR rep for images
     const ecrRepository = new EcrRepository(this, `${projectName}-ecr-reg`, {
       name: projectName,
       imageTagMutability: imageTagMutability,
@@ -199,7 +196,7 @@ class ECRAppInstance extends TerraformStack {
       },
     });
 
-    // Create IAM Policy for ECR operations (minimal required permissions)
+    // Create IAM Policy for ECR operations
     new IamRolePolicy(this, `${projectName}-ecr-policy`, {
       name: `${projectName}-ecr-policy`,
       role: ecrRole.id,
@@ -656,8 +653,6 @@ class ECRAppInstance extends TerraformStack {
             }
           ],
           healthCheck: {
-            // TODO: Update this to actually check path of the application
-            //command: ["CMD-SHELL","ls"],
             command: ["CMD-SHELL", `wget --spider --no-verbose --server-response http://localhost:${ecsServiceContainerPort}`],
             interval: 60,
             timeout: 10,
@@ -698,7 +693,7 @@ class ECRAppInstance extends TerraformStack {
       cluster: ecsCluster.id,
       taskDefinition: ecsTaskDefinition.arn,
       launchType: "FARGATE",
-      desiredCount: 2, // TODO: Cap this at 2 for now, could do 1 per AZ
+      desiredCount: 2, 
       networkConfiguration: {
         subnets: publicSubnets.map(subnet => subnet.id),
         securityGroups: [ecsSecurityGroup.id],

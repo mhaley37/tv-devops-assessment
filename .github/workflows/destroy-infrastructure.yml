@@ -38,9 +38,6 @@ jobs:
       - name: Get providers
         working-directory: ./iac
         run: npm run get
-      - name: Synthesize CDKTF
-        run: npm run synth
-
       - name: Deploy infrastructure
         id: deploy
         working-directory: ./iac
